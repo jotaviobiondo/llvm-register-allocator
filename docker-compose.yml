@@ -1,0 +1,7 @@
+version: '2'
+services:
+  code:
+    build: .
+    command: /bin/bash test.sh
+    volumes:
+      - .:/home/app/code
