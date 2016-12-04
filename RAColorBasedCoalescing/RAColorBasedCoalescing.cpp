@@ -2,8 +2,8 @@
 //
 //                     The LLVM Compiler Infrastructure
 //
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// This file is distributed under the MIT License.
+// See the LICENSE file for details.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -13,10 +13,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/Passes.h"
-#include "../../AllocationOrder.h"
-#include "../../LiveDebugVariables.h"
-#include "../../RegAllocBase.h"
-#include "../../Spiller.h"
+#include "AllocationOrder.h"
+#include "LiveDebugVariables.h"
+#include "RegAllocBase.h"
+#include "Spiller.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
@@ -41,8 +41,14 @@ using namespace llvm;
 
 #define DEBUG_TYPE "regalloc"
 
-static RegisterRegAlloc colorBasedCoalescingRegAlloc("colorBased", "color-based coalescing register allocator",
-                                      createBasicRegisterAllocator);
+namespace llvm {
+  FunctionPass *createBasicRegisterAllocator();
+}
+
+static RegisterRegAlloc colorBasedCoalescingRegAlloc("colorBased", 
+                                                    "color-based coalescing register allocator",
+                                                    createBasicRegisterAllocator);
+
 
 namespace {
   struct CompSpillWeight {
@@ -274,6 +280,10 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
                << "********** Function: "
                << mf.getName() << '\n');
 
+  dbgs() << "********** COLOR-BASED COALESCING REGISTER ALLOCATION **********\n"
+               << "********** Function: "
+               << mf.getName() << '\n';
+
   MF = &mf;
   RegAllocBase::init(getAnalysis<VirtRegMap>(),
                      getAnalysis<LiveIntervals>(),
@@ -299,3 +309,5 @@ FunctionPass *llvm::createBasicRegisterAllocator()
 {
   return new RAColorBasedCoalescing();
 }
+
+
