@@ -45,7 +45,7 @@ namespace llvm {
   FunctionPass *createBasicRegisterAllocator();
 }
 
-static RegisterRegAlloc colorBasedCoalescingRegAlloc("colorBased", 
+static RegisterRegAlloc colorBasedCoalescingRegAlloc("colorBased",
                                                     "color-based coalescing register allocator",
                                                     createBasicRegisterAllocator);
 
@@ -284,6 +284,8 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
                << "********** Function: "
                << mf.getName() << '\n';
 
+  dbgs() << "BlaBla\n";
+
   MF = &mf;
   RegAllocBase::init(getAnalysis<VirtRegMap>(),
                      getAnalysis<LiveIntervals>(),
@@ -309,5 +311,3 @@ FunctionPass *llvm::createBasicRegisterAllocator()
 {
   return new RAColorBasedCoalescing();
 }
-
-
