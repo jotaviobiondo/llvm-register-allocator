@@ -42,12 +42,11 @@ using namespace llvm;
 #define DEBUG_TYPE "regalloc"
 
 namespace llvm {
-  FunctionPass *createBasicRegisterAllocator();
+  FunctionPass *createMyRegAlloc();
 }
-
-static RegisterRegAlloc colorBasedCoalescingRegAlloc("colorBased",
-                                                    "color-based coalescing register allocator",
-                                                    createBasicRegisterAllocator);
+static RegisterRegAlloc colorBasedCoalescingRegAlloc("myregalloc",
+                                                     "color-based coalescing register allocator",
+                                                     createMyRegAlloc);
 
 
 namespace {
@@ -284,7 +283,7 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
                << "********** Function: "
                << mf.getName() << '\n';
 
-  dbgs() << "BlaBla\n";
+  dbgs() << "BlaBlaBla\n";
 
   MF = &mf;
   RegAllocBase::init(getAnalysis<VirtRegMap>(),
@@ -307,7 +306,7 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
   return true;
 }
 
-FunctionPass *llvm::createBasicRegisterAllocator()
+FunctionPass *llvm::createMyRegAlloc()
 {
   return new RAColorBasedCoalescing();
 }

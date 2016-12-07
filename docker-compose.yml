@@ -3,4 +3,4 @@ services:
   code:
     build: .
     volumes:
-      - .:/usr/local/src/llvm-build/llvm/lib/CodeGen/RAColorBasedCoalescing/
+      - .:/root/RAColorBasedCoalescing/
