@@ -35,6 +35,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include <cstdlib>
+#include <map>
+#include <set>
 #include <queue>
 
 using namespace llvm;
@@ -58,6 +60,9 @@ namespace {
 }
 
 namespace {
+
+  std::map<unsigned, std::set<unsigned>> InterferenceGraph;
+  std::map<unsigned, int> Degree;
 /// RAColorBasedCoalescing provides a minimal implementation of the basic register allocation
 /// algorithm. It prioritizes live virtual registers by spill weight and spills
 /// whenever a register is unavailable. This is not practical in production but
@@ -76,6 +81,9 @@ class RAColorBasedCoalescing : public MachineFunctionPass, public RegAllocBase
   // Scratch space.  Allocated here to avoid repeated malloc calls in
   // selectOrSplit().
   BitVector UsableRegs;
+
+private:
+  void buildInterferenceGraph();
 
 public:
   RAColorBasedCoalescing();
@@ -283,13 +291,11 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
                << "********** Function: "
                << mf.getName() << '\n';
 
-  dbgs() << "BlaBlaBla\n";
-
   MF = &mf;
   RegAllocBase::init(getAnalysis<VirtRegMap>(),
                      getAnalysis<LiveIntervals>(),
                      getAnalysis<LiveRegMatrix>());
-
+  buildInterferenceGraph();
   calculateSpillWeightsAndHints(*LIS, *MF, VRM,
                                 getAnalysis<MachineLoopInfo>(),
                                 getAnalysis<MachineBlockFrequencyInfo>());
@@ -304,6 +310,44 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
 
   releaseMemory();
   return true;
+}
+
+//Builds Interference Graph
+void RAColorBasedCoalescing::buildInterferenceGraph()
+{
+	int num=0;
+	for (LiveIntervals::iterator ii = LIS->begin(); ii != LIS->end(); ii++)
+	{
+
+		if(TRI->isPhysicalRegister(ii->first))
+			continue;
+		num++;
+		OnStack[ii->first] = false;
+		InterferenceGraph[ii->first].insert(0);
+		const LiveInterval *li = ii->second;
+		for (LiveIntervals::iterator jj = LIS->begin(); jj != LIS->end(); jj++)
+		{
+			const LiveInterval *li2 = jj->second;
+			if(jj->first == ii->first)
+				continue;
+			if(TRI->isPhysicalRegister(jj->first))
+				continue;
+			if (li->overlaps(*li2))
+			{
+				if(!InterferenceGraph[ii->first].count(jj->first))
+				{
+					InterferenceGraph[ii->first].insert(jj->first);
+					Degree[ii->first]++;
+				}
+				if(!InterferenceGraph[jj->first].count(ii->first))
+				{
+					InterferenceGraph[jj->first].insert(ii->first);
+					Degree[jj->first]++;
+				}
+			}
+		}
+	}
+	dbgs( )<<"\nVirtual registers: "<<num;
 }
 
 FunctionPass *llvm::createMyRegAlloc()
