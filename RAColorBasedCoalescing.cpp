@@ -44,10 +44,10 @@ using namespace llvm;
 namespace llvm {
   FunctionPass *createMyRegAlloc();
 }
+
 static RegisterRegAlloc colorBasedCoalescingRegAlloc("myregalloc",
                                                      "color-based coalescing register allocator",
                                                      createMyRegAlloc);
-
 
 namespace {
   struct CompSpillWeight {
@@ -283,8 +283,6 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
                << "********** Function: "
                << mf.getName() << '\n';
 
-  dbgs() << "BlaBlaBla\n";
-
   MF = &mf;
   RegAllocBase::init(getAnalysis<VirtRegMap>(),
                      getAnalysis<LiveIntervals>(),
@@ -296,11 +294,73 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
 
   SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM));
 
+
+
+  dbgs() << "NUM: " << MRI->getNumVirtRegs() << '\n';
+  
+  for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
+    // reg ID
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    // if is not a DEBUG register
+    if (MRI->reg_nodbg_empty(Reg))
+      continue;
+
+    // get the respective LiveInterval
+    LiveInterval *VirtReg = &LIS->getInterval(Reg);
+    dbgs() << *VirtReg << '\n';
+
+    //dbgs() << "VIRT: " << i << " - W: " << VirtReg->weight << " KK: " << VirtReg->reg << '\n';
+
+    /*AllocationOrder Order(VirtReg->reg, *VRM, RegClassInfo, Matrix);
+    while (unsigned PhysReg = Order.next()) {
+      Matrix->assign(*VirtReg, PhysReg);
+      // Check for interference in PhysReg
+      switch (Matrix->checkInterference(*VirtReg, PhysReg)) {
+        case LiveRegMatrix::IK_Free:
+          // PhysReg is available, allocate it.
+          dbgs() << "VIRT: " << i << " - PHYS: " << PhysReg << " KK: " << VirtReg->reg << " PHYS2 " << PrintReg(PhysReg, TRI) << '\n';
+          break;
+        case LiveRegMatrix::IK_VirtReg:
+          // Only virtual registers in the way, we may be able to spill them.
+          dbgs() << "VIRT2: " << i << " - PHYS: " << PhysReg << " KK: " << VirtReg->reg << " PHYS2 " << PrintReg(PhysReg, TRI) << '\n';
+          break;
+        default:
+          // RegMask or RegUnit interference.
+          break;
+      }
+    }*/
+
+    /*for (MachineRegisterInfo::reg_instr_iterator I = MRI->reg_instr_begin(VirtReg->reg), E = MRI->reg_instr_end(); I != E; ) {
+      MachineInstr *TmpMI = &*(I++);
+      dbgs() << "MI: " << *TmpMI << '\n';
+    }*/
+  }
+
+  /*bool change = true;
+  //split
+  while (change) {
+    //change = buildInterferenceGraph
+    while (totalSpillCost < totalPreviousSpillCost && i < MAX_ITERATIONS) {
+      //totalPreviousSpillCost = totalSpillCost
+      //simplify (remove from interference graph, add to stack)
+      //coloring (with no limit of colors)
+      //coalescing
+      //totalSpillCost = ...
+      //clear
+    }
+    //simplify
+    //coloring
+    // if(no spill) break
+  }*/
+
+
   allocatePhysRegs();
+  //VRM->assignVirt2Phys(teste, 23u);
   postOptimization();
 
   // Diagnostic output before rewriting
-  DEBUG(dbgs() << "Post alloc VirtRegMap:\n" << *VRM << "\n");
+  //DEBUG(dbgs() << "Post alloc VirtRegMap:\n" << *VRM << "\n");
+  dbgs() << "Post alloc VirtRegMap:\n" << *VRM << "\n";
 
   releaseMemory();
   return true;
