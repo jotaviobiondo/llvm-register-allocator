@@ -315,39 +315,53 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
 //Builds Interference Graph
 void RAColorBasedCoalescing::buildInterferenceGraph()
 {
-	int num=0;
-	for (LiveIntervals::iterator ii = LIS->begin(); ii != LIS->end(); ii++)
-	{
-
-		if(TRI->isPhysicalRegister(ii->first))
-			continue;
-		num++;
-		OnStack[ii->first] = false;
-		InterferenceGraph[ii->first].insert(0);
-		const LiveInterval *li = ii->second;
-		for (LiveIntervals::iterator jj = LIS->begin(); jj != LIS->end(); jj++)
-		{
-			const LiveInterval *li2 = jj->second;
-			if(jj->first == ii->first)
-				continue;
-			if(TRI->isPhysicalRegister(jj->first))
-				continue;
-			if (li->overlaps(*li2))
-			{
-				if(!InterferenceGraph[ii->first].count(jj->first))
-				{
-					InterferenceGraph[ii->first].insert(jj->first);
-					Degree[ii->first]++;
-				}
-				if(!InterferenceGraph[jj->first].count(ii->first))
-				{
-					InterferenceGraph[jj->first].insert(ii->first);
-					Degree[jj->first]++;
-				}
-			}
-		}
-	}
-	dbgs( )<<"\nVirtual registers: "<<num;
+  for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
+    // reg ID
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    dbgs() << "index2VirtReg i: " << i << " Reg: " << Reg << "\n";
+    dbgs() << PrintReg(Reg, TRI) << "\n";
+    // if is not a DEBUG register
+    if (MRI->reg_nodbg_empty(Reg)) {
+      dbgs() << "It is a DEBUG register.\n";
+      continue;
+    }
+    // get the respective LiveInterval
+    LiveInterval *VirtReg = &LIS->getInterval(Reg);
+    dbgs() << "LiveInterval: " << VirtReg << "\n";
+  }
+	// int num=0;
+	// for (LiveIntervals::iterator ii = LIS->begin(); ii != LIS->end(); ii++)
+	// {
+  //
+	// 	if(TRI->isPhysicalRegister(ii->first))
+	// 		continue;
+	// 	num++;
+	// 	OnStack[ii->first] = false;
+	// 	InterferenceGraph[ii->first].insert(0);
+	// 	const LiveInterval *li = ii->second;
+	// 	for (LiveIntervals::iterator jj = LIS->begin(); jj != LIS->end(); jj++)
+	// 	{
+	// 		const LiveInterval *li2 = jj->second;
+	// 		if(jj->first == ii->first)
+	// 			continue;
+	// 		if(TRI->isPhysicalRegister(jj->first))
+	// 			continue;
+	// 		if (li->overlaps(*li2))
+	// 		{
+	// 			if(!InterferenceGraph[ii->first].count(jj->first))
+	// 			{
+	// 				InterferenceGraph[ii->first].insert(jj->first);
+	// 				Degree[ii->first]++;
+	// 			}
+	// 			if(!InterferenceGraph[jj->first].count(ii->first))
+	// 			{
+	// 				InterferenceGraph[jj->first].insert(ii->first);
+	// 				Degree[jj->first]++;
+	// 			}
+	// 		}
+	// 	}
+	// }
+	// dbgs( )<<"\nVirtual registers: "<<num;
 }
 
 FunctionPass *llvm::createMyRegAlloc()
