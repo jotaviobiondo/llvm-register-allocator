@@ -8,15 +8,15 @@
 //===----------------------------------------------------------------------===//
 //
 // This file defines the RAColorBasedCoalescing function pass, which provides
-// a implementation of the Color-based coalescing register allocator.
+// a implementation of the Coloring-based coalescing register allocator.
 //
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/Passes.h"
-#include "AllocationOrder.h"
-#include "LiveDebugVariables.h"
-#include "RegAllocBase.h"
-#include "Spiller.h"
+#include "CodeGen/AllocationOrder.h"
+#include "CodeGen/LiveDebugVariables.h"
+#include "/usr/local/src/llvm-build/llvm/lib/CodeGen/RegAllocBase.h"
+#include "/usr/local/src/llvm-build/llvm/lib/CodeGen/Spiller.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
@@ -44,12 +44,12 @@ using namespace llvm;
 #define DEBUG_TYPE "regalloc"
 
 namespace llvm {
-  FunctionPass *createMyRegAlloc();
+  FunctionPass *createColorBasedRegAlloc();
 }
 
-static RegisterRegAlloc colorBasedCoalescingRegAlloc("myregalloc",
+static RegisterRegAlloc colorBasedCoalescingRegAlloc("colorBased",
                                                      "color-based coalescing register allocator",
-                                                     createMyRegAlloc);
+                                                     createColorBasedRegAlloc);
 
 namespace {
   struct CompSpillWeight {
@@ -63,74 +63,73 @@ namespace {
 
   std::map<unsigned, std::set<unsigned>> InterferenceGraph;
   std::map<unsigned, int> Degree;
-/// RAColorBasedCoalescing provides a minimal implementation of the basic register allocation
-/// algorithm. It prioritizes live virtual registers by spill weight and spills
-/// whenever a register is unavailable. This is not practical in production but
-/// provides a useful baseline both for measuring other allocators and comparing
-/// the speed of the basic algorithm against other styles of allocators.
-class RAColorBasedCoalescing : public MachineFunctionPass, public RegAllocBase
-{
-  // context
-  MachineFunction *MF;
 
-  // state
-  std::unique_ptr<Spiller> SpillerInstance;
-  std::priority_queue<LiveInterval*, std::vector<LiveInterval*>,
-                      CompSpillWeight> Queue;
+  class RAColorBasedCoalescing : public MachineFunctionPass, public RegAllocBase {
+    // context
+    MachineFunction *MF;
 
-  // Scratch space.  Allocated here to avoid repeated malloc calls in
-  // selectOrSplit().
-  BitVector UsableRegs;
+    // state
+    std::unique_ptr<Spiller> SpillerInstance;
+    std::priority_queue<LiveInterval*, std::vector<LiveInterval*>,
+                        CompSpillWeight> Queue;
 
-private:
-  void buildInterferenceGraph();
+    // Scratch space.  Allocated here to avoid repeated malloc calls in
+    // selectOrSplit().
+    BitVector UsableRegs;
 
-public:
-  RAColorBasedCoalescing();
+    private:
+      void split(MachineFunction &mf);
 
-  /// Return the pass name.
-  StringRef getPassName() const override { return "Color-based Coalescing Register Allocator"; }
+      void buildInterferenceGraph(MachineFunction &mf);
 
-  /// RAColorBasedCoalescing analysis usage.
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
+      void addInterferenceEdge();
 
-  void releaseMemory() override;
+    public:
+      RAColorBasedCoalescing();
 
-  Spiller &spiller() override { return *SpillerInstance; }
+      /// Return the pass name.
+      StringRef getPassName() const override { return "Color-based Coalescing Register Allocator"; }
 
-  void enqueue(LiveInterval *LI) override {
-    Queue.push(LI);
-  }
+      /// RAColorBasedCoalescing analysis usage.
+      void getAnalysisUsage(AnalysisUsage &AU) const override;
 
-  LiveInterval *dequeue() override {
-    if (Queue.empty())
-      return nullptr;
-    LiveInterval *LI = Queue.top();
-    Queue.pop();
-    return LI;
-  }
+      void releaseMemory() override;
 
-  unsigned selectOrSplit(LiveInterval &VirtReg,
-                         SmallVectorImpl<unsigned> &SplitVRegs) override;
+      Spiller &spiller() override { return *SpillerInstance; }
 
-  /// Perform register allocation.
-  bool runOnMachineFunction(MachineFunction &mf) override;
+      void enqueue(LiveInterval *LI) override {
+        Queue.push(LI);
+      }
 
-  MachineFunctionProperties getRequiredProperties() const override {
-    return MachineFunctionProperties().set(
-        MachineFunctionProperties::Property::NoPHIs);
-  }
+      LiveInterval *dequeue() override {
+        if (Queue.empty())
+          return nullptr;
+        LiveInterval *LI = Queue.top();
+        Queue.pop();
+        return LI;
+      }
 
-  // Helper for spilling all live virtual registers currently unified under preg
-  // that interfere with the most recently queried lvr.  Return true if spilling
-  // was successful, and append any new spilled/split intervals to splitLVRs.
-  bool spillInterferences(LiveInterval &VirtReg, unsigned PhysReg,
-                          SmallVectorImpl<unsigned> &SplitVRegs);
+      unsigned selectOrSplit(LiveInterval &VirtReg,
+                             SmallVectorImpl<unsigned> &SplitVRegs) override;
 
-  static char ID;
-};
+      /// Perform register allocation.
+      bool runOnMachineFunction(MachineFunction &mf) override;
 
-char RAColorBasedCoalescing::ID = 0;
+      MachineFunctionProperties getRequiredProperties() const override {
+        return MachineFunctionProperties().set(
+            MachineFunctionProperties::Property::NoPHIs);
+      }
+
+      // Helper for spilling all live virtual registers currently unified under preg
+      // that interfere with the most recently queried lvr.  Return true if spilling
+      // was successful, and append any new spilled/split intervals to splitLVRs.
+      bool spillInterferences(LiveInterval &VirtReg, unsigned PhysReg,
+                              SmallVectorImpl<unsigned> &SplitVRegs);
+
+      static char ID;
+  };
+
+  char RAColorBasedCoalescing::ID = 0;
 
 } // end anonymous namespace
 
@@ -179,8 +178,7 @@ void RAColorBasedCoalescing::releaseMemory() {
 // Spill or split all live virtual registers currently unified under PhysReg
 // that interfere with VirtReg. The newly spilled or split live intervals are
 // returned by appending them to SplitVRegs.
-bool RAColorBasedCoalescing::spillInterferences(LiveInterval &VirtReg, unsigned PhysReg,
-                                 SmallVectorImpl<unsigned> &SplitVRegs) {
+bool RAColorBasedCoalescing::spillInterferences(LiveInterval &VirtReg, unsigned PhysReg, SmallVectorImpl<unsigned> &SplitVRegs) {
   // Record each interference and determine if all are spillable before mutating
   // either the union or live intervals.
   SmallVector<LiveInterval*, 8> Intfs;
@@ -233,8 +231,7 @@ bool RAColorBasedCoalescing::spillInterferences(LiveInterval &VirtReg, unsigned 
 // |vregs| * |machineregs|. And since the number of interference tests is
 // minimal, there is no value in caching them outside the scope of
 // selectOrSplit().
-unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg,
-                                SmallVectorImpl<unsigned> &SplitVRegs) {
+unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &SplitVRegs) {
   // Populate a list of physical register spill candidates.
   SmallVector<unsigned, 8> PhysRegSpillCands;
 
@@ -282,12 +279,39 @@ unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg,
   return 0;
 }
 
-bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
-  DEBUG(dbgs() << "********** COLOR-BASED COALESCING REGISTER ALLOCATION **********\n"
-               << "********** Function: "
-               << mf.getName() << '\n');
+//===---------------------------------===//
+//   Coloring-Based Coalescing Methods
+//===---------------------------------===//
 
-  dbgs() << "********** COLOR-BASED COALESCING REGISTER ALLOCATION **********\n"
+void RAColorBasedCoalescing::split(MachineFunction &mf) {
+
+}
+
+// Add a interference edge on the Interference Graph
+void RAColorBasedCoalescing::addInterferenceEdge() {
+  
+}
+
+// Builds the Interference Graph
+void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
+  for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
+    // reg ID
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    dbgs() << "index2VirtReg i: " << i << " Reg: " << Reg << "\n";
+    dbgs() << PrintReg(Reg, TRI) << "\n";
+    // if is not a DEBUG register
+    if (MRI->reg_nodbg_empty(Reg)) {
+      dbgs() << "It is a DEBUG register.\n";
+      continue;
+    }
+    // get the respective LiveInterval
+    LiveInterval *VirtReg = &LIS->getInterval(Reg);
+    dbgs() << "LiveInterval: " << VirtReg << "\n";
+  }
+}
+
+bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
+  dbgs() << "\n********** COLORING-BASED COALESCING REGISTER ALLOCATION **********\n"
                << "********** Function: "
                << mf.getName() << '\n';
 
@@ -295,7 +319,7 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
   RegAllocBase::init(getAnalysis<VirtRegMap>(),
                      getAnalysis<LiveIntervals>(),
                      getAnalysis<LiveRegMatrix>());
-  buildInterferenceGraph();
+
   calculateSpillWeightsAndHints(*LIS, *MF, VRM,
                                 getAnalysis<MachineLoopInfo>(),
                                 getAnalysis<MachineBlockFrequencyInfo>());
@@ -303,8 +327,9 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
   SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM));
 
 
+  dbgs() << "********** Number of virtual registers: " << MRI->getNumVirtRegs() << "\n\n";
 
-  dbgs() << "NUM: " << MRI->getNumVirtRegs() << '\n';
+  //buildInterferenceGraph(mf);
   
   for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
     // reg ID
@@ -316,32 +341,6 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
     // get the respective LiveInterval
     LiveInterval *VirtReg = &LIS->getInterval(Reg);
     dbgs() << *VirtReg << '\n';
-
-    //dbgs() << "VIRT: " << i << " - W: " << VirtReg->weight << " KK: " << VirtReg->reg << '\n';
-
-    /*AllocationOrder Order(VirtReg->reg, *VRM, RegClassInfo, Matrix);
-    while (unsigned PhysReg = Order.next()) {
-      Matrix->assign(*VirtReg, PhysReg);
-      // Check for interference in PhysReg
-      switch (Matrix->checkInterference(*VirtReg, PhysReg)) {
-        case LiveRegMatrix::IK_Free:
-          // PhysReg is available, allocate it.
-          dbgs() << "VIRT: " << i << " - PHYS: " << PhysReg << " KK: " << VirtReg->reg << " PHYS2 " << PrintReg(PhysReg, TRI) << '\n';
-          break;
-        case LiveRegMatrix::IK_VirtReg:
-          // Only virtual registers in the way, we may be able to spill them.
-          dbgs() << "VIRT2: " << i << " - PHYS: " << PhysReg << " KK: " << VirtReg->reg << " PHYS2 " << PrintReg(PhysReg, TRI) << '\n';
-          break;
-        default:
-          // RegMask or RegUnit interference.
-          break;
-      }
-    }*/
-
-    /*for (MachineRegisterInfo::reg_instr_iterator I = MRI->reg_instr_begin(VirtReg->reg), E = MRI->reg_instr_end(); I != E; ) {
-      MachineInstr *TmpMI = &*(I++);
-      dbgs() << "MI: " << *TmpMI << '\n';
-    }*/
   }
 
   /*bool change = true;
@@ -363,70 +362,15 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
 
 
   allocatePhysRegs();
-  //VRM->assignVirt2Phys(teste, 23u);
   postOptimization();
 
   // Diagnostic output before rewriting
-  //DEBUG(dbgs() << "Post alloc VirtRegMap:\n" << *VRM << "\n");
-  dbgs() << "Post alloc VirtRegMap:\n" << *VRM << "\n";
+  dbgs() << "\nPost alloc VirtRegMap:\n" << *VRM << "\n";
 
   releaseMemory();
   return true;
 }
 
-//Builds Interference Graph
-void RAColorBasedCoalescing::buildInterferenceGraph()
-{
-  for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
-    // reg ID
-    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
-    dbgs() << "index2VirtReg i: " << i << " Reg: " << Reg << "\n";
-    dbgs() << PrintReg(Reg, TRI) << "\n";
-    // if is not a DEBUG register
-    if (MRI->reg_nodbg_empty(Reg)) {
-      dbgs() << "It is a DEBUG register.\n";
-      continue;
-    }
-    // get the respective LiveInterval
-    LiveInterval *VirtReg = &LIS->getInterval(Reg);
-    dbgs() << "LiveInterval: " << VirtReg << "\n";
-  }
-	// int num=0;
-	// for (LiveIntervals::iterator ii = LIS->begin(); ii != LIS->end(); ii++)
-	// {
-  //
-	// 	if(TRI->isPhysicalRegister(ii->first))
-	// 		continue;
-	// 	num++;
-	// 	OnStack[ii->first] = false;
-	// 	InterferenceGraph[ii->first].insert(0);
-	// 	const LiveInterval *li = ii->second;
-	// 	for (LiveIntervals::iterator jj = LIS->begin(); jj != LIS->end(); jj++)
-	// 	{
-	// 		const LiveInterval *li2 = jj->second;
-	// 		if(jj->first == ii->first)
-	// 			continue;
-	// 		if(TRI->isPhysicalRegister(jj->first))
-	// 			continue;
-	// 		if (li->overlaps(*li2))
-	// 		{
-	// 			if(!InterferenceGraph[ii->first].count(jj->first))
-	// 			{
-	// 				InterferenceGraph[ii->first].insert(jj->first);
-	// 				Degree[ii->first]++;
-	// 			}
-	// 			if(!InterferenceGraph[jj->first].count(ii->first))
-	// 			{
-	// 				InterferenceGraph[jj->first].insert(ii->first);
-	// 				Degree[jj->first]++;
-	// 			}
-	// 		}
-	// 	}
-	// }
-	// dbgs( )<<"\nVirtual registers: "<<num;
-}
-
-FunctionPass *llvm::createMyRegAlloc()
-{
+FunctionPass *llvm::createColorBasedRegAlloc() {
   return new RAColorBasedCoalescing();
 }
