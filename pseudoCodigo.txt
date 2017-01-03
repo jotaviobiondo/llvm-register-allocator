@@ -1,0 +1,237 @@
+1 - Split
+  Dividir Live Ranges em sub Live Ranges
+  Ver LiveRange::Segment
+  Método: Dividir no ponto que o valor tem o valor sobrescrito
+
+2 - Renumber
+  Cada parte dividida recebe um nome próprio
+
+3 - Build
+  Constroi grafo
+  Arestas Artificiais nos subranges
+
+4 - Spill Costs
+  Calcular o custo para cada Live Range
+
+5 - Simplify - 1
+  Nós são retirados do grafo e colocados na fila
+  Ordem: min(Spill Costs (LR) / Grau (LR))
+
+6 - Biased select with extend colors
+  Mais cores que o número de registradores físicos
+  Não pode assignar cor para "spilled" nós
+
+7 - Coloring-based coalesce
+  Coalescing copy-related com mesma cor
+
+8 - Save and Confirm
+  Compara se houve uma melhora 
+  Se houver melhora, volta para o simplify-1
+  Se não, da restore e vai para o clear
+
+9 - Clear
+  Apagar as cores
+
+10 - Simplify-2
+  Idêntico ao Simplify-1
+
+11 - Biased Select
+  Similar ao '6' mas sem cores extendidas, se não der para colocar dá spill
+
+12 - Confirm
+  Se houver spill, chama spill code voltar para renumber
+  Se não, aloca
+
+BasedColor(){
+  spill = true;
+  improvement = true;
+
+  split()
+  while(spill){
+    renumber();
+    build();
+    spillCosts();
+
+    while(improvement){
+      backup = subranges;
+
+      simplify();
+      biased_select_extend();
+      coalesce();
+      
+      if(save_confirm()){
+        spill_cost_anterior = spill_cost_atual;
+        improvemente = true;
+      } else{
+        subranges = backup;
+        improvement = false;
+      }
+
+      clear();
+    }
+
+    simplify();
+    biased_select();
+
+    if(confirm()){
+      spillCode();
+    } else {
+      spill = false;
+    }
+  }
+
+  alocar()
+}
+
+split(){
+  for(i = 1; i <= ranges.size(); i++){
+    ranges[i].subRanges = new List();
+    if(ranges[i].canSplit()){
+      inicio = ranges[i].begin();
+      for(j = ranges[i].begin(); j <= ranges[i].end(); j++){
+        if(line[j].hasWrite(ranges[i]) || j == ranges[i].end()){
+          ranges[i].subRanges.add(inicio, j-1);
+          inicio = j;
+        }
+      }
+    } else {
+      ranges[i].subRanges.add(ranges[i].begin(), ranges[i].end);
+    }
+  }
+}
+
+renumber(){
+  for(i = 1; i <= ranges.size(); i++){
+    for(j = 1; j <= ranges[i].subranges.size(); j++){
+      ranges.subranges[j].name = RECEBENOME();
+    }
+  }
+}
+
+build(){
+  for(i = 1; <= i < ranges.size(); i++){
+    for(j = 1; j < ranges[i].subranges.size()){
+      sub = ranges[i].subranges[j];
+      graph.node.add(sub);
+      for(n = 1; n <= graph.nodes.size(); n++){
+        if(hasInterference(sub, graph.nodes[n])){
+          graph.edge.add(sub, graph.nodes[n]);
+        }
+        if(isCopyRelated(sub, graph.nodes[n])){
+          graph.edgeArtificial.add(sub, graph.nodes[n]);
+        }
+      }
+    }
+  }
+}
+
+spillCosts(){
+  for(i = 1; <= i < ranges.size(); i++){
+    for(j = 1; j < ranges[i].subranges.size()){
+      ranges[i].subranges[j].cost = NUMBER_ACESS();
+    }
+  }
+}
+
+simplify(){
+  graph_copy = graph;
+  while(graph_copy.nodes.size() != 0){
+    min = INF;
+    node_min = NULL;
+    for(i = 0; i <= graph_copy.nodes.size(); i++){
+      value = graph_copy.nodes[i].cost/ graph_copy.nodes[i].degree();
+      if(value < min){
+        min = value;
+        node_min = graph_copy.nodes[i]; 
+      }
+    }
+    graph_copy.remove(node_min);
+    colorStack.push(node_min);
+  }
+}
+
+biased_select_extend(){
+  while(colorstack.size() != 0){
+    X = colorstack.pop();
+    X.color = color.receive();
+  }
+
+
+  color.receive(){
+    if(color_real.hasColorsAvailable()){
+      COR = color_real.availableANDallocatedToCopyRelated();
+      if(COR != NULL){
+        return COR;
+      } else {
+        return color_real.available();
+      }
+    } 
+    if (color_extend.hasColorAvailable()) {
+      COR = color_extend.availableANDallocatedToCopyRelated();
+      if(COR != NULL){
+        return color_real.available();
+      }
+    }
+    return new color();
+  }
+}
+
+coalesce(){
+  for(i = 1; i <= ranges.size(); i++){
+    stackSubranges = pushAllSubRanges();
+    while(stackSubRanges.size() != 0){
+      X = List();
+      X[0] = stackSubRanges.popBegin();
+      ind = 1;
+      for(j = 1; j <= stackSubRanges.end(); j++){
+        if(X[0].color == stackSubRanges[j].color){
+          X[ind] = stackSubRanges.pop(j);
+          ind++;
+          j--;
+        }
+      }
+    }
+    ranges.coalescing(X);
+  }
+}
+
+save_confirm(){
+  if(spill_cost_atual < spill_cost_anterior){
+    return true;
+  }
+  return false;
+}
+
+clear(){
+  for(i = 0; i <= graph.nodes.size(); i++){
+    graph.nodes[i].color == NULL;
+  }
+}
+
+biased_select_extend(){
+  while(colorstack.size() != 0){
+    X = colorstack.pop();
+    X.color = color.receive();
+  }
+
+  color.receive(){
+    if(color_real.hasColorsAvailable()){
+      COR = color_real.availableANDallocatedToCopyRelated();
+      if(COR != NULL){
+        return COR;
+      } else {
+        return color_real.available();
+      }
+    } 
+    return NULL;
+  }
+}
+
+confirm(){
+  for(i = 1; i <= graph.nodes.size(); i++){
+    if(graph.nodes[i].color == NULL){
+      return true;
+    }
+  }
+  return false;
+}
