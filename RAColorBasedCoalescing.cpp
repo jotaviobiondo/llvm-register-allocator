@@ -396,7 +396,7 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
     // get the respective LiveInterval
     LiveInterval *VirtReg = &LIS->getInterval(Reg);
     //dbgs() << *VirtReg << '\n';
-    /*VirtRegVec SplitVRegs;
+    VirtRegVec SplitVRegs;
     AllocationOrder Order(VirtReg->reg, *VRM, RegClassInfo, Matrix);
     tryBlockSplit(*VirtReg, Order, SplitVRegs);
 
@@ -405,7 +405,7 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
       LiveInterval *SplitVirtReg = &LIS->getInterval(*I);
       dbgs() << *SplitVirtReg << '\n';
     }
-    dbgs() << "------------------------------------\n";*/
+    dbgs() << "------------------------------------\n";
   }
 
   dbgs() << "\n2222********** Number of virtual registers: " << MRI->getNumVirtRegs() << "\n\n";
@@ -461,8 +461,10 @@ unsigned RAColorBasedCoalescing::tryBlockSplit(LiveInterval &VirtReg, Allocation
 
   for (unsigned i = 0; i != UseBlocks.size(); ++i) {
     const SplitAnalysis::BlockInfo &BI = UseBlocks[i];
-    if (SA->shouldSplitSingleBlock(BI, SingleInstrs))
+    if (SA->shouldSplitSingleBlock(BI, SingleInstrs)) {
+      dbgs() << "Splitando!!!!!!!!!";
       SE->splitSingleBlock(BI);
+    }
   }
   // No blocks were split.
   if (LREdit.empty())
