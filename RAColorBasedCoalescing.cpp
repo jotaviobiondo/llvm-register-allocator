@@ -110,6 +110,10 @@ namespace {
 
       void spillCode(MachineFunction &mf);
 
+      bool overlapsFrom1(const LiveRange *VR, const LiveRange *other) const;
+
+      void printGraph();
+
     public:
       RAColorBasedCoalescing();
 
@@ -401,79 +405,123 @@ void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
       unsigned vReg1 = VirtReg1->reg;
 
       if(VirtReg == VirtReg1){
-        dbgs() << "IGUAL " << VirtReg->reg << " == " << VirtReg1->reg << "\n\n";
+        //dbgs() << "IGUAL " << VirtReg->reg << " == " << VirtReg1->reg << "\n\n";
         continue;
       }
 
-      dbgs() << "DIF " << *VirtReg << " == " << *VirtReg1 << "\n\n";
+      //dbgs() << "DIF " << *VirtReg << " == " << *VirtReg1 << "\n";
 
-      if(VirtReg->overlaps(VirtReg1)){
-        dbgs() << "ENTROU!!\n\n";
+      //llvm::LiveRange::iterator inicio = VirtReg->begin();
+      //llvm::LiveRange::iterator inicio1 = VirtReg1->begin();
+      //dbgs() << "INICIO " << *inicio << " == " << *inicio1 << "\n";
+      //llvm::LiveRange::iterator fim = VirtReg->end();
+      //llvm::LiveRange::iterator fim1 = VirtReg1->end();
+      //dbgs() << "FIM " << *fim << " == " << *fim1 << "\n\n";
 
+
+      
+      
+      //dbgs() << "RETORNO " << t << "\n";
+      if(VirtReg->overlaps(*VirtReg1)){
+      //if(overlapsFrom1(VirtReg, VirtReg1)){
+        //dbgs() << "ENTROU!!\n\n";
+        //dbgs() << "\n" << *VirtReg;
+        //dbgs() << "\n" << *VirtReg1 << "\n\n";
         if(!InterferenceGraph[vReg].count(vReg1)){
-          dbgs() << "ADD " << VirtReg1->reg << " em " << VirtReg->reg << "\n\n";
+          //dbgs() << "ADD " << VirtReg1->reg << " em " << VirtReg->reg << "\n\n";
           InterferenceGraph[vReg].insert(vReg1);
           Degree[vReg]++;
         }
         if(!InterferenceGraph[vReg1].count(vReg)){
-          dbgs() << "ADD " << VirtReg->reg << " em " << VirtReg1->reg << "\n\n";
+          //dbgs() << "ADD " << VirtReg->reg << " em " << VirtReg1->reg << "\n\n";
           InterferenceGraph[vReg1].insert(vReg);
           Degree[vReg1]++;
         }
+      } else {
+        //dbgs() << "\n" << *VirtReg;
+        //dbgs() << "\n" << *VirtReg1 << "\n\n";
       }
     }
   }
+  //dbgs() << "\nTOTAL => " << InterferenceGraph.size();
+  printGraph();
   errs( ) << "\nVirtual registers: " << num << "\n";
 }
 
+void RAColorBasedCoalescing::printGraph(){
+  for(unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i){
 
-  /*LiveInterval *MaiorPeso;
-  float maior = 0;
-  for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
-    // reg ID
+    //reg ID
     unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
-    dbgs() << "index2VirtReg i: " << i << " Reg: " << Reg << "\n";
-    dbgs() << PrintReg(Reg, TRI) << "\n";
-    // if is not a DEBUG register
-    if (MRI->reg_nodbg_empty(Reg)) {
-      dbgs() << "It is a DEBUG register.\n\n\n";
+    if(MRI->reg_nodbg_empty(Reg)) {
+      //dbgs() << "DEBUG Register\n\n";
       continue;
     }
-    // get the respective LiveInterval
+
+    //get the respective LiveInterval
     LiveInterval *VirtReg = &LIS->getInterval(Reg);
+    unsigned vReg = VirtReg->reg;
 
-    dbgs() << "LiveInterval: " << *VirtReg << "\n";
-    //dbgs() << "SubRange: " << *VirtReg->SubRanges << "\n";
-    /*if(VirtReg->hasSubRanges()){
-      dbgs() << "TEM SUBRANGES!!!!\n";
-    } else {
-      dbgs () << "NAO TEM!!!\n";
-    }
-    //dbgs() << "Inicio: " << vni_begin() << "\n";
-    //dbgs() << "Fim " << vni_end() << "\n"; 
-    dbgs() << "Peso : " << VirtReg->weight <<"\n";
-    dbgs() << "\n\n";
+    unsigned tamanho = InterferenceGraph[vReg].size();
+    dbgs() << "TAMANHO DE " << vReg << " => " << tamanho << "\n";
 
-    if(VirtReg->weight > maior){
-      MaiorPeso = VirtReg;
-      maior = VirtReg->weight;
-    }
+
   }
+}
 
-  dbgs() << "MAIOR PESO => " << *MaiorPeso << "\n" << "Peso => " << maior << "\n\n";
+bool RAColorBasedCoalescing::overlapsFrom1(const LiveRange *VR, const LiveRange *other) const {
+  assert(!empty() && "empty range");
+  llvm::LiveRange::const_iterator StartPos = other->begin();
+  llvm::LiveRange::const_iterator i = VR->begin();
+  llvm::LiveRange::const_iterator ie = VR->end();
+  llvm::LiveRange::const_iterator j = StartPos;
+  llvm::LiveRange::const_iterator je = other->end();
 
-  /*for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
-    // reg ID
-    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
-    // if is not a DEBUG register
-    if (MRI->reg_nodbg_empty(Reg))
-      continue;
+  //dbgs() << "\ni => " << *i; 
+  //dbgs() << "\nie => " << *ie; 
+  //dbgs() << "\nj => " << *j; 
+  //dbgs() << "\nje => " << *je << "\n\n";
+   
+  assert((StartPos->start <= i->start || StartPos == other.begin()) && StartPos != other.end() && "Bogus start position hint!");
 
-    // get the respective LiveInterval
-    LiveInterval *VirtReg = &LIS->getInterval(Reg);
-    dbgs() << *VirtReg << '\n';
+
+  if (i->start < j->start) {
+    i = std::upper_bound(i, ie, j->start);
+    if (i != VR->begin()) --i;
+  } else if (j->start < i->start) {
+    ++StartPos;
+    if (StartPos != other->end() && StartPos->start <= i->start) {
+      assert(StartPos < other->end() && i < VR->end());
+      j = std::upper_bound(j, je, i->start);
+      if (j != other->begin()) --j;
+    }
+  } else {
+    //dbgs() << "PRIMEIRO TRUE\n";
+    return true;
   }
-}*/
+  
+  if (j == je) {
+    //dbgs() << "FALSE J == JE\n";
+    return false;
+  }
+  
+  while (i != ie) {
+    if (i->start > j->start) {
+      std::swap(i, j);
+      std::swap(ie, je);
+    }
+  
+    if (i->end > j->start){
+      //dbgs() << "SEGUNDO TRUE \n";
+      return true;
+    }
+  
+    ++i;
+  }
+  
+  //dbgs() << "CHEGA ATE AQUI!\n"; 
+  return false;
+}
 
 void RAColorBasedCoalescing::calculateSpillCosts(MachineFunction &mf){
 
