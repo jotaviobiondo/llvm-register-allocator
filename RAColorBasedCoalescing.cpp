@@ -66,6 +66,7 @@ namespace {
   std::map<unsigned, bool> OnStack;
   std::queue<unsigned> ColoringStack;
   std::set<unsigned> Colored;
+  std::map<unsigned, unsigned> Colored_phase1;
   BitVector Allocatable;
   std::set<unsigned> PhysicalRegisters;
 
@@ -523,8 +524,37 @@ void RAColorBasedCoalescing::simplify(MachineFunction &mf){
 
 }
 
+/*cores de 1 a x
+  cores de 1 até o nº reg fisicos sao cores reais
+  cores adiante sao extendidas
+  ele vai percorrer as cores de 1 a X, logo ele so vai pegar cor_extendida se nao houver cor real disponivel
+  falta fazer a parte do copy-related e verificação para saber qual o nº de reg fisico
+*/
 void RAColorBasedCoalescing::biased_select_extend(MachineFunction &mf){
+  unsigned cor;
+  bool color_ok;
+  while(!ColoringStack.empty()){
+    unsigned reg = ColoringStack.front();
+    ColoringStack.pop();
 
+    cor = 1;
+    color_ok = false;
+
+    while(!color_ok){
+      color_ok = true;
+      for(std::set<unsigned> :: iterator i = InterferenceGraph[reg].begin(); i != InterferenceGraph[reg].end(); i++){
+        //dbgs() << Colored_phase1.find(*i)->second << "\n";
+        if(Colored_phase1.find(*i)->second == cor){
+          cor++;
+          color_ok = false;
+          break;
+        }
+      }
+    }
+
+    Colored_phase1[reg] = cor;
+    dbgs() << "COR => " << cor;
+  }
 }
 
 void RAColorBasedCoalescing::coalescing(MachineFunction &mf){
