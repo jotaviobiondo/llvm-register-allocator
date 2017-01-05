@@ -64,6 +64,7 @@ namespace {
   std::map<unsigned, std::set<unsigned>> InterferenceGraph;
   std::map<unsigned, int> Degree;
   std::map<unsigned, bool> OnStack;
+  std::queue<unsigned> ColoringStack;
   std::set<unsigned> Colored;
   BitVector Allocatable;
   std::set<unsigned> PhysicalRegisters;
@@ -373,6 +374,7 @@ void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
   //std::map<unsigned, int> Degree;
   //std::map<unsigned, bool> OnStack;
   //std::set<unsigned> Colored;
+  //std::queue<unsigned> ColoringStack;
   //BitVector Allocatable;
   //std::set<unsigned> PhysicalRegisters;
   
@@ -392,10 +394,10 @@ void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
     unsigned vReg = VirtReg->reg;
     
     OnStack[vReg] = false;
-    InterferenceGraph[vReg].insert(0);
+    
+    //VER PQ ELE INSERE ESSE 0
+    //InterferenceGraph[vReg].insert(0);
 
-    //ver como fazer
-    //const LiveInterval *li = ii->second;
     for(unsigned j = 0, r = MRI->getNumVirtRegs(); j != r; ++j){
       unsigned Reg1 = TargetRegisterInfo::index2VirtReg(j);
       if(MRI->reg_nodbg_empty(Reg1)){
@@ -405,67 +407,34 @@ void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
       unsigned vReg1 = VirtReg1->reg;
 
       if(VirtReg == VirtReg1){
-        //dbgs() << "IGUAL " << VirtReg->reg << " == " << VirtReg1->reg << "\n\n";
         continue;
       }
 
-      //dbgs() << "DIF " << *VirtReg << " == " << *VirtReg1 << "\n";
-
-      //llvm::LiveRange::iterator inicio = VirtReg->begin();
-      //llvm::LiveRange::iterator inicio1 = VirtReg1->begin();
-      //dbgs() << "INICIO " << *inicio << " == " << *inicio1 << "\n";
-      //llvm::LiveRange::iterator fim = VirtReg->end();
-      //llvm::LiveRange::iterator fim1 = VirtReg1->end();
-      //dbgs() << "FIM " << *fim << " == " << *fim1 << "\n\n";
-
-
-      
-      
-      //dbgs() << "RETORNO " << t << "\n";
       if(VirtReg->overlaps(*VirtReg1)){
-      //if(overlapsFrom1(VirtReg, VirtReg1)){
-        //dbgs() << "ENTROU!!\n\n";
-        //dbgs() << "\n" << *VirtReg;
-        //dbgs() << "\n" << *VirtReg1 << "\n\n";
         if(!InterferenceGraph[vReg].count(vReg1)){
-          //dbgs() << "ADD " << VirtReg1->reg << " em " << VirtReg->reg << "\n\n";
           InterferenceGraph[vReg].insert(vReg1);
           Degree[vReg]++;
         }
         if(!InterferenceGraph[vReg1].count(vReg)){
-          //dbgs() << "ADD " << VirtReg->reg << " em " << VirtReg1->reg << "\n\n";
           InterferenceGraph[vReg1].insert(vReg);
           Degree[vReg1]++;
         }
-      } else {
-        //dbgs() << "\n" << *VirtReg;
-        //dbgs() << "\n" << *VirtReg1 << "\n\n";
-      }
+      } 
     }
   }
-  //dbgs() << "\nTOTAL => " << InterferenceGraph.size();
-  printGraph();
+  //printGraph();
   errs( ) << "\nVirtual registers: " << num << "\n";
 }
 
 void RAColorBasedCoalescing::printGraph(){
-  for(unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i){
-
-    //reg ID
-    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
-    if(MRI->reg_nodbg_empty(Reg)) {
-      //dbgs() << "DEBUG Register\n\n";
-      continue;
+  for(std::map<unsigned, std::set<unsigned>> :: iterator j = InterferenceGraph.begin(); j != InterferenceGraph.end(); j++){
+    dbgs() << "Numero de Interferencias " << j->first << " => " << Degree[j->first] << "\n"; 
+    std::set<unsigned> lista = j->second;
+    dbgs() << "Registradores com interferencia:\n";
+    for(std::set<unsigned> :: iterator k = j->second.begin(); k != j->second.end(); k++){
+      dbgs() << *k << "\n";
     }
-
-    //get the respective LiveInterval
-    LiveInterval *VirtReg = &LIS->getInterval(Reg);
-    unsigned vReg = VirtReg->reg;
-
-    unsigned tamanho = InterferenceGraph[vReg].size();
-    dbgs() << "TAMANHO DE " << vReg << " => " << tamanho << "\n";
-
-
+    dbgs() << "\n";
   }
 }
 
@@ -528,6 +497,29 @@ void RAColorBasedCoalescing::calculateSpillCosts(MachineFunction &mf){
 }
 
 void RAColorBasedCoalescing::simplify(MachineFunction &mf){
+  unsigned min = 0;
+  for(std::map<unsigned, std::set<unsigned>> :: iterator i = InterferenceGraph.begin(); i != InterferenceGraph.end(); i++){
+    if(!OnStack[i->first] && (min == 0 || Degree[i->first] < Degree[min])){
+      min = i->first;
+    }
+  }
+
+  //graph empty
+  if(min == 0){
+    return;
+  }
+
+  OnStack[min] = true;
+  ColoringStack.push(min);
+  //dbgs() <<"Enfileirou => " << ColoringStack.back() << "\n";
+
+  for(std::map<unsigned, std::set<unsigned>> :: iterator j = InterferenceGraph.begin(); j != InterferenceGraph.end(); j++){
+    if(j->second.count(min)){
+      Degree[j->first]--;
+    }
+  }
+
+  simplify(mf);
 
 }
 
