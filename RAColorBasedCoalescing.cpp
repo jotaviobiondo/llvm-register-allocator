@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/Passes.h"
 #include "CodeGen/AllocationOrder.h"
 #include "CodeGen/LiveDebugVariables.h"
+#include "CodeGen/SplitKit.h"
 #include "/usr/local/src/llvm-build/llvm/lib/CodeGen/RegAllocBase.h"
 #include "/usr/local/src/llvm-build/llvm/lib/CodeGen/Spiller.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -24,6 +25,7 @@
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -38,6 +40,7 @@
 #include <map>
 #include <set>
 #include <queue>
+#include <list>
 
 using namespace llvm;
 
@@ -61,6 +64,22 @@ namespace {
 
 namespace {
 
+  //Analysis
+  //SlotIndexes *Indexes;
+  MachineBlockFrequencyInfo *MBFI;
+  MachineDominatorTree *DomTree;
+  MachineLoopInfo *Loops;
+  //EdgeBundles *Bundles;
+  //SpillPlacement *SpillPlacer;
+  LiveDebugVariables *DebugVars;
+  AliasAnalysis *AA;
+
+  //split
+  std::unique_ptr<SplitAnalysis> SA;
+  std::unique_ptr<SplitEditor> SE;
+  
+
+  //graph
   std::map<unsigned, std::set<unsigned>> InterferenceGraph;
   std::map<unsigned, int> Degree;
   std::map<unsigned, bool> OnStack;
@@ -69,6 +88,8 @@ namespace {
   std::map<unsigned, unsigned> Colored_phase1;
   BitVector Allocatable;
   std::set<unsigned> PhysicalRegisters;
+
+
 
   class RAColorBasedCoalescing : public MachineFunctionPass, public RegAllocBase {
     // context
@@ -86,7 +107,9 @@ namespace {
     private:
       void algorithm(MachineFunction &mf);
 
-      void split(MachineFunction &mf);
+      void initialize_split(MachineFunction &mf);
+
+      unsigned tryBlockSplit(LiveInterval &VirtReg, AllocationOrder &Order, SmallVectorImpl<unsigned> &NewVRegs);
 
       void renumber(MachineFunction &mf);
 
@@ -251,18 +274,18 @@ bool RAColorBasedCoalescing::spillInterferences(LiveInterval &VirtReg, unsigned 
   return true;
 }
 
-// Driver for the register assignment and splitting heuristics.
-// Manages iteration over the LiveIntervalUnions.
-//
-// This is a minimal implementation of register assignment and splitting that
-// spills whenever we run out of registers.
-//
-// selectOrSplit can only be called once per live virtual register. We then do a
-// single interference test for each register the correct class until we find an
-// available register. So, the number of interference tests in the worst case is
-// |vregs| * |machineregs|. And since the number of interference tests is
-// minimal, there is no value in caching them outside the scope of
-// selectOrSplit().
+/* Driver for the register assignment and splitting heuristics.
+ Manages iteration over the LiveIntervalUnions.
+
+ This is a minimal implementation of register assignment and splitting that
+ spills whenever we run out of registers.
+
+ selectOrSplit can only be called once per live virtual register. We then do a
+ single interference test for each register the correct class until we find an
+ available register. So, the number of interference tests in the worst case is
+ |vregs| * |machineregs|. And since the number of interference tests is
+ minimal, there is no value in caching them outside the scope of
+ selectOrSplit().*/
 unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &SplitVRegs) {
   // Populate a list of physical register spill candidates.
   SmallVector<unsigned, 8> PhysRegSpillCands;
@@ -318,7 +341,7 @@ void RAColorBasedCoalescing::algorithm(MachineFunction &mf){
   bool spill = true;
   bool improvement = true;
 
-  split(mf);
+  initialize_split(mf);
   while (spill){
     renumber(mf);
     buildInterferenceGraph(mf);
@@ -355,8 +378,67 @@ void RAColorBasedCoalescing::algorithm(MachineFunction &mf){
 }
 
 
-void RAColorBasedCoalescing::split(MachineFunction &mf) {
+void RAColorBasedCoalescing::initialize_split(MachineFunction &mf) {
+  typedef SmallVector<unsigned, 4> VirtRegVec;
+  //dbgs() << "NUM REG VIRT => " << MRI->getNumVirtRegs() << "\n";
+  //dbgs() << "NUM REGS =>" << TRI->getNumRegs() << "\n";
+  if(MRI->getNumVirtRegs()  > TRI->getNumRegs()){
+    //dbgs() << "MAIOR QUE TUDO!!!\n\n";
+  }
+  for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
+    // reg ID
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    // if is not a DEBUG register
+    if (MRI->reg_nodbg_empty(Reg))
+      continue;
 
+    // get the respective LiveInterval
+    LiveInterval *VirtReg = &LIS->getInterval(Reg);
+    //dbgs() << *VirtReg << '\n';
+    VirtRegVec SplitVRegs;
+    AllocationOrder Order(VirtReg->reg, *VRM, RegClassInfo, Matrix);
+    dbgs() << "\n\n====================================\n";
+    //dbgs() << "ORDER => " << Order.size() << "\n";
+    dbgs() << "ORIGINAL => " << *VirtReg;
+    tryBlockSplit(*VirtReg, Order, SplitVRegs);
+
+    dbgs() << "\n------------------------------------\n";
+    for (VirtRegVec::iterator I = SplitVRegs.begin(), E = SplitVRegs.end(); I != E; ++I) {
+      LiveInterval *SplitVirtReg = &LIS->getInterval(*I);
+      dbgs() << *SplitVirtReg << '\n';
+    }
+    dbgs() << "------------------------------------\n";
+  }
+}
+
+unsigned RAColorBasedCoalescing::tryBlockSplit(LiveInterval &VirtReg, AllocationOrder &Order, SmallVectorImpl<unsigned> &NewVRegs) {
+  SA->analyze(&VirtReg);
+  assert(&SA->getParent() == &VirtReg && "Live range wasn't analyzed");
+  unsigned Reg = VirtReg.reg;
+  bool SingleInstrs = RegClassInfo.isProperSubClass(MRI->getRegClass(Reg));
+  LiveRangeEdit LREdit(&VirtReg, NewVRegs, *MF, *LIS, VRM, nullptr);
+  SE->reset(LREdit);
+  ArrayRef<SplitAnalysis::BlockInfo> UseBlocks = SA->getUseBlocks();
+
+  for (unsigned i = 0; i != UseBlocks.size(); ++i) {
+    const SplitAnalysis::BlockInfo &BI = UseBlocks[i];
+    if (SA->shouldSplitSingleBlock(BI, SingleInstrs)) {
+      //dbgs() << "Splitando!!!!!!!!!";
+      SE->splitSingleBlock(BI);
+    }
+  }
+  // No blocks were split.
+  if (LREdit.empty())
+    return 0;
+
+  // We did split for some blocks.
+  SmallVector<unsigned, 8> IntvMap;
+  SE->finish(&IntvMap);
+
+  // Tell LiveDebugVariables about the new ranges.
+  DebugVars->splitRegister(Reg, LREdit.regs(), *LIS);
+
+  return 0;
 }
 
 void RAColorBasedCoalescing::renumber(MachineFunction &mf){
@@ -380,6 +462,8 @@ void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
   //std::set<unsigned> PhysicalRegisters;
   
   int num = 0;
+  
+  //para cada VREG
   for(unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i){
 
     //reg ID
@@ -399,6 +483,7 @@ void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
     //VER PQ ELE INSERE ESSE 0
     //InterferenceGraph[vReg].insert(0);
 
+    //Para cada vReg1
     for(unsigned j = 0, r = MRI->getNumVirtRegs(); j != r; ++j){
       unsigned Reg1 = TargetRegisterInfo::index2VirtReg(j);
       if(MRI->reg_nodbg_empty(Reg1)){
@@ -407,15 +492,21 @@ void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
       LiveInterval *VirtReg1 = &LIS->getInterval(Reg1);
       unsigned vReg1 = VirtReg1->reg;
 
+      //se for igual n compara
       if(VirtReg == VirtReg1){
         continue;
       }
 
+      //se tiver intersecção entre vReg e Vreg1
       if(VirtReg->overlaps(*VirtReg1)){
+
+        //add vReg1 na lista de vReg
         if(!InterferenceGraph[vReg].count(vReg1)){
           InterferenceGraph[vReg].insert(vReg1);
           Degree[vReg]++;
         }
+
+        //add vReg na lista de vReg1
         if(!InterferenceGraph[vReg1].count(vReg)){
           InterferenceGraph[vReg1].insert(vReg);
           Degree[vReg1]++;
@@ -499,6 +590,7 @@ void RAColorBasedCoalescing::calculateSpillCosts(MachineFunction &mf){
 
 void RAColorBasedCoalescing::simplify(MachineFunction &mf){
   unsigned min = 0;
+  //para cada aresta no grafo
   for(std::map<unsigned, std::set<unsigned>> :: iterator i = InterferenceGraph.begin(); i != InterferenceGraph.end(); i++){
     if(!OnStack[i->first] && (min == 0 || Degree[i->first] < Degree[min])){
       min = i->first;
@@ -510,16 +602,21 @@ void RAColorBasedCoalescing::simplify(MachineFunction &mf){
     return;
   }
 
+  //add o min como true para n comparar dnv
   OnStack[min] = true;
+
+  //add o min na fila para colorir
   ColoringStack.push(min);
   //dbgs() <<"Enfileirou => " << ColoringStack.back() << "\n";
 
+  //retirando o min das listas de arestas dos outros
   for(std::map<unsigned, std::set<unsigned>> :: iterator j = InterferenceGraph.begin(); j != InterferenceGraph.end(); j++){
     if(j->second.count(min)){
       Degree[j->first]--;
     }
   }
 
+  //chamar até min = 0
   simplify(mf);
 
 }
@@ -533,7 +630,11 @@ void RAColorBasedCoalescing::simplify(MachineFunction &mf){
 void RAColorBasedCoalescing::biased_select_extend(MachineFunction &mf){
   unsigned cor;
   bool color_ok;
+
+  //enquanto tiver nó para colorir 
   while(!ColoringStack.empty()){
+
+    //pega o primeiro e retira da fila
     unsigned reg = ColoringStack.front();
     ColoringStack.pop();
 
@@ -542,8 +643,12 @@ void RAColorBasedCoalescing::biased_select_extend(MachineFunction &mf){
 
     while(!color_ok){
       color_ok = true;
+      
+      //para cada no do grafo
       for(std::set<unsigned> :: iterator i = InterferenceGraph[reg].begin(); i != InterferenceGraph[reg].end(); i++){
         //dbgs() << Colored_phase1.find(*i)->second << "\n";
+        
+        //se tiver a cor atual, incrementa
         if(Colored_phase1.find(*i)->second == cor){
           cor++;
           color_ok = false;
@@ -553,7 +658,8 @@ void RAColorBasedCoalescing::biased_select_extend(MachineFunction &mf){
     }
 
     Colored_phase1[reg] = cor;
-    dbgs() << "COR => " << cor;
+    LiveInterval *VirtReg = &LIS->getInterval(reg);
+    dbgs() << "\nVREG => " << *VirtReg << " -- REG => " << reg << " -- COR => " << cor;
   }
 }
 
@@ -566,7 +672,12 @@ bool RAColorBasedCoalescing::save_confirm(MachineFunction &mf){
 }
 
 void RAColorBasedCoalescing::clear(MachineFunction &mf){
-
+  InterferenceGraph.clear();
+  OnStack.clear();
+  //ColoringStack.clear();
+  Colored_phase1.clear();
+  Degree.clear();
+  Colored.clear();
 }
 
 void RAColorBasedCoalescing::biased_select(MachineFunction &mf){
@@ -591,14 +702,29 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
                      getAnalysis<LiveIntervals>(),
                      getAnalysis<LiveRegMatrix>());
 
+  //Indexes = &getAnalysis<SlotIndexes>();
+  MBFI = &getAnalysis<MachineBlockFrequencyInfo>();
+  DomTree = &getAnalysis<MachineDominatorTree>();
+
+
+
   calculateSpillWeightsAndHints(*LIS, *MF, VRM,
                                 getAnalysis<MachineLoopInfo>(),
                                 getAnalysis<MachineBlockFrequencyInfo>());
 
   SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM));
 
+  Loops = &getAnalysis<MachineLoopInfo>();
+  //Bundles = &getAnalysis<EdgeBundles>();
+  //SpillPlacer = &getAnalysis<SpillPlacement>();
+  DebugVars = &getAnalysis<LiveDebugVariables>();
+  AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+
 
   dbgs() << "********** Number of virtual registers: " << MRI->getNumVirtRegs() << "\n\n";
+
+  SA.reset(new SplitAnalysis(*VRM, *LIS, *Loops));
+  SE.reset(new SplitEditor(*SA, *AA, *LIS, *VRM, *DomTree, *MBFI));
 
   algorithm(mf);
   
