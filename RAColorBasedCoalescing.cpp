@@ -90,6 +90,7 @@ namespace {
   std::set<unsigned> PhysicalRegisters;
 
   std::map<unsigned, std::set<unsigned>> CopyRelated;
+  std::set<unsigned> Spills;
 
 
 
@@ -138,6 +139,8 @@ namespace {
       bool overlapsFrom(const LiveRange *VR, const LiveRange *other) const;
 
       void printInterferenceGraph();
+
+      bool RAColorBasedCoalescing::isExtendedColor(int color);
 
     public:
       RAColorBasedCoalescing();
@@ -703,7 +706,18 @@ bool RAColorBasedCoalescing::confirm(MachineFunction &mf) {
 }
 
 void RAColorBasedCoalescing::spillCode(MachineFunction &mf) {
+  for(std::map<unsigned, unsigned> :: iterator i = Colored_phase1.begin(); i != Colored_phase1.end(); i++) {
+    unsigned vreg = i->first;
+    unsigned color = i->second;
 
+    if (isExtendedColor(color)) {
+      Spills.insert(vreg);
+    }
+  }
+}
+
+bool RAColorBasedCoalescing::isExtendedColor(int color) {
+  return color < 0;
 }
 
 bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
