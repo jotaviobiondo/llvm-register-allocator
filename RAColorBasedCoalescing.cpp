@@ -85,12 +85,14 @@ namespace {
   std::map<unsigned, bool> OnStack;
   std::queue<unsigned> ColoringStack;
   std::set<unsigned> Colored;
-  std::map<unsigned, unsigned> Colored_phase1;
+  std::map<unsigned, int> Colored_phase1;
   BitVector Allocatable;
   std::set<unsigned> PhysicalRegisters;
 
   std::map<unsigned, std::set<unsigned>> CopyRelated;
   std::set<unsigned> Spills;
+
+  std::queue<int> ExtendedColors;
 
 
 
@@ -140,7 +142,9 @@ namespace {
 
       void printInterferenceGraph();
 
-      bool RAColorBasedCoalescing::isExtendedColor(int color);
+      bool isExtendedColor(int color);
+
+      std::set<unsigned> getPotentialRegs(unsigned vreg);
 
     public:
       RAColorBasedCoalescing();
@@ -447,11 +451,11 @@ void RAColorBasedCoalescing::coalescing(MachineFunction &mf) {
   for(std::map<unsigned, std::set<unsigned>> :: iterator i = CopyRelated.begin(); i != CopyRelated.end(); i++) {
     for(std::set<unsigned> :: iterator j = i->second.begin(); j != i->second.end(); j++) {
       unsigned copy_related1 = *j;
-      unsigned color1 = Colored_phase1[copy_related1];
+      int color1 = Colored_phase1[copy_related1];
       
       for(std::set<unsigned> :: iterator k = i->second.begin(); k != i->second.end(); k++) {
         unsigned copy_related2 = *k;
-        unsigned color2 = Colored_phase1[copy_related2];
+        int color2 = Colored_phase1[copy_related2];
 
         if (copy_related1 == copy_related2) {
           continue;
@@ -641,6 +645,17 @@ void RAColorBasedCoalescing::simplify(MachineFunction &mf) {
   simplify(mf);
 }
 
+std::set<unsigned> RAColorBasedCoalescing::getPotentialRegs(unsigned vreg) {
+  std::set<unsigned> potentialRegs;
+
+  AllocationOrder Order(vreg, *VRM, RegClassInfo, Matrix);
+  while (unsigned physReg = Order.next()) {
+    potentialRegs.insert(physReg);
+  }
+
+  return potentialRegs;
+}
+
 /*cores de 1 a x
   cores de 1 até o nº reg fisicos sao cores reais
   cores adiante sao extendidas
@@ -648,8 +663,7 @@ void RAColorBasedCoalescing::simplify(MachineFunction &mf) {
   falta fazer a parte do copy-related e verificação para saber qual o nº de reg fisico
 */
 void RAColorBasedCoalescing::biased_select_extend(MachineFunction &mf) {
-  unsigned color;
-  bool color_ok;
+
 
   //enquanto tiver nó para colorir 
   while(!ColoringStack.empty()) {
@@ -658,28 +672,72 @@ void RAColorBasedCoalescing::biased_select_extend(MachineFunction &mf) {
     unsigned reg = ColoringStack.front();
     ColoringStack.pop();
 
-    color = 1;
-    color_ok = false;
+    int color;
+    bool color_ok = true;
+    std::set<unsigned> potentialRegs = getPotentialRegs(reg);
 
-    while(!color_ok) {
+    for(std::set<unsigned> :: iterator i = potentialRegs.begin(); i != potentialRegs.end(); i++) {
+      color = *i;
       color_ok = true;
-      
-      //para cada no do grafo
-      for(std::set<unsigned> :: iterator i = InterferenceGraph[reg].begin(); i != InterferenceGraph[reg].end(); i++) {
-        //dbgs() << Colored_phase1.find(*i)->second << "\n";
+      for(std::set<unsigned> :: iterator j = InterferenceGraph[reg].begin(); j != InterferenceGraph[reg].end(); j++) {
+        int colorOfNeighbor = Colored_phase1[*j]; //TALVEZ MUDAR ISSO
         
-        //se tiver a cor atual, incrementa
-        if(Colored_phase1.find(*i)->second == color) {
-          color++;
+        if (colorOfNeighbor == color) {
           color_ok = false;
           break;
         }
       }
+
+      if (color_ok) {
+        break;
+      }
     }
 
-    Colored_phase1[reg] = color;
-    LiveInterval *VirtReg = &LIS->getInterval(reg);
-    dbgs() << *VirtReg << "::" << reg << " -- COLOR => " << color << "\n";
+    if (color_ok) {
+      Colored_phase1[reg] = color;
+      LiveInterval *VirtReg = &LIS->getInterval(reg);
+      dbgs() << *VirtReg << "::" << reg << " -- COLOR => " << color << "\n";
+    } else {
+      //extended color
+
+      color = getExtendedColor(reg);
+
+      Colored_phase1[reg] = color;
+      LiveInterval *VirtReg = &LIS->getInterval(reg);
+      dbgs() << *VirtReg << "::" << reg << " -- EXTENDED COLOR => " << color << "\n";
+    }
+}
+
+int RAColorBasedCoalescing::getExtendedColor(unsigned vreg) {
+  bool color_ok = false;
+  int color;
+
+  for(std::set<unsigned> :: iterator j = InterferenceGraph[vreg].begin(); j != InterferenceGraph[vreg].end(); j++) {
+    int colorOfNeighbor = Colored_phase1[*j]; //TALVEZ MUDAR ISSO
+
+    if (!isExtendedColor(colorOfNeighbor) || (colorOfNeighbor ) )
+    
+    if (colorOfNeighbor == color) {
+      color_ok = false;
+      break;
+    }
+  }
+
+  for(std::queue<unsigned> :: iterator i = ExtendedColors.begin(); i != ExtendedColors.end(); i++) {
+    int color = *i;
+    color_ok = true;
+    for(std::set<unsigned> :: iterator j = InterferenceGraph[reg].begin(); j != InterferenceGraph[reg].end(); j++) {
+      int colorOfNeighbor = Colored_phase1[*j];
+      
+      if (colorOfNeighbor == color) {
+        color_ok = false;
+        break;
+      }
+    }
+
+    if (color_ok) {
+      break;
+    }
   }
 }
 
@@ -706,9 +764,9 @@ bool RAColorBasedCoalescing::confirm(MachineFunction &mf) {
 }
 
 void RAColorBasedCoalescing::spillCode(MachineFunction &mf) {
-  for(std::map<unsigned, unsigned> :: iterator i = Colored_phase1.begin(); i != Colored_phase1.end(); i++) {
+  for(std::map<unsigned, int> :: iterator i = Colored_phase1.begin(); i != Colored_phase1.end(); i++) {
     unsigned vreg = i->first;
-    unsigned color = i->second;
+    int color = i->second;
 
     if (isExtendedColor(color)) {
       Spills.insert(vreg);
