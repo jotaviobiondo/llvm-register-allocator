@@ -47,7 +47,6 @@ using namespace llvm;
 #define DEBUG_TYPE "regalloc"
 
 #define COLOR_INVALID 0
-#define MAX_ITERATIONS 10
 
 namespace llvm {
   FunctionPass *createColorBasedRegAlloc();
@@ -70,7 +69,7 @@ namespace {
   //LLVM
   MachineBlockFrequencyInfo *MBFI;
   MachineDominatorTree *DomTree;
-  MachineLoopInfo *Loops;
+  MachineLoopInfo *MLI;
   LiveDebugVariables *DebugVars;
   AliasAnalysis *AA;
 
@@ -87,6 +86,7 @@ namespace {
   std::map<unsigned, int> Colors;
   std::map<unsigned, std::set<unsigned>> CopyRelated;
   std::list<int> ExtendedColors;
+  std::map<unsigned, double> SpillWeight;
 
 
   class RAColorBasedCoalescing : public MachineFunctionPass, public RegAllocBase {
@@ -191,12 +191,6 @@ namespace {
             MachineFunctionProperties::Property::NoPHIs);
       }
 
-      // Helper for spilling all live virtual registers currently unified under preg
-      // that interfere with the most recently queried lvr.  Return true if spilling
-      // was successful, and append any new spilled/split intervals to splitLVRs.
-      bool spillInterferences(LiveInterval &VirtReg, unsigned PhysReg,
-                              SmallVectorImpl<unsigned> &SplitVRegs);
-
       static char ID;
   };
 
@@ -244,112 +238,6 @@ void RAColorBasedCoalescing::getAnalysisUsage(AnalysisUsage &AU) const {
 void RAColorBasedCoalescing::releaseMemory() {
   SpillerInstance.reset();
 }
-
-
-// Spill or split all live virtual registers currently unified under PhysReg
-// that interfere with VirtReg. The newly spilled or split live intervals are
-// returned by appending them to SplitVRegs.
-bool RAColorBasedCoalescing::spillInterferences(LiveInterval &VirtReg, unsigned PhysReg, SmallVectorImpl<unsigned> &SplitVRegs) {
-  // Record each interference and determine if all are spillable before mutating
-  // either the union or live intervals.
-  SmallVector<LiveInterval*, 8> Intfs;
-
-  // Collect interferences assigned to any alias of the physical register.
-  for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid(); ++Units) {
-    LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, *Units);
-    Q.collectInterferingVRegs();
-    if (Q.seenUnspillableVReg())
-      return false;
-    for (unsigned i = Q.interferingVRegs().size(); i; --i) {
-      LiveInterval *Intf = Q.interferingVRegs()[i - 1];
-      if (!Intf->isSpillable() || Intf->weight > VirtReg.weight)
-        return false;
-      Intfs.push_back(Intf);
-    }
-  }
-  DEBUG(dbgs() << "spilling " << TRI->getName(PhysReg) <<
-        " interferences with " << VirtReg << "\n");
-  assert(!Intfs.empty() && "expected interference");
-
-  // Spill each interfering vreg allocated to PhysReg or an alias.
-  for (unsigned i = 0, e = Intfs.size(); i != e; ++i) {
-    LiveInterval &Spill = *Intfs[i];
-
-    // Skip duplicates.
-    if (!VRM->hasPhys(Spill.reg))
-      continue;
-
-    // Deallocate the interfering vreg by removing it from the union.
-    // A LiveInterval instance may not be in a union during modification!
-    Matrix->unassign(Spill);
-
-    // Spill the extracted interval.
-    LiveRangeEdit LRE(&Spill, SplitVRegs, *MF, *LIS, VRM, nullptr, &DeadRemats);
-    spiller().spill(LRE);
-  }
-  return true;
-}
-
-/* Driver for the register assignment and splitting heuristics.
- Manages iteration over the LiveIntervalUnions.
-
- This is a minimal implementation of register assignment and splitting that
- spills whenever we run out of registers.
-
- selectOrSplit can only be called once per live virtual register. We then do a
- single interference test for each register the correct class until we find an
- available register. So, the number of interference tests in the worst case is
- |vregs| * |machineregs|. And since the number of interference tests is
- minimal, there is no value in caching them outside the scope of
- selectOrSplit().*/
-/*unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &SplitVRegs) {
-  // Populate a list of physical register spill candidates.
-  SmallVector<unsigned, 8> PhysRegSpillCands;
-
-  // Check for an available register in this class.
-  AllocationOrder Order(VirtReg.reg, *VRM, RegClassInfo, Matrix);
-  while (unsigned PhysReg = Order.next()) {
-    // Check for interference in PhysReg
-    switch (Matrix->checkInterference(VirtReg, PhysReg)) {
-    case LiveRegMatrix::IK_Free:
-      // PhysReg is available, allocate it.
-      return PhysReg;
-
-    case LiveRegMatrix::IK_VirtReg:
-      // Only virtual registers in the way, we may be able to spill them.
-      PhysRegSpillCands.push_back(PhysReg);
-      continue;
-
-    default:
-      // RegMask or RegUnit interference.
-      continue;
-    }
-  }
-
-  // Try to spill another interfering reg with less spill weight.
-  for (SmallVectorImpl<unsigned>::iterator PhysRegI = PhysRegSpillCands.begin(),
-       PhysRegE = PhysRegSpillCands.end(); PhysRegI != PhysRegE; ++PhysRegI) {
-    if (!spillInterferences(VirtReg, *PhysRegI, SplitVRegs))
-      continue;
-
-    assert(!Matrix->checkInterference(VirtReg, *PhysRegI) &&
-           "Interference after spill.");
-    // Tell the caller to allocate to this newly freed physical register.
-    return *PhysRegI;
-  }
-
-  // No other spill candidates were found, so spill the current VirtReg.
-  DEBUG(dbgs() << "spilling: " << VirtReg << '\n');
-  if (!VirtReg.isSpillable())
-    return ~0u;
-  LiveRangeEdit LRE(&VirtReg, SplitVRegs, *MF, *LIS, VRM, nullptr, &DeadRemats);
-  spiller().spill(LRE);
-
-  // The live virtual register requesting allocation was spilled, so tell
-  // the caller not to allocate anything during this round.
-  return 0;
-}*/
-
 
 unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &SplitVRegs) {
 
@@ -443,6 +331,26 @@ void RAColorBasedCoalescing::algorithm(MachineFunction &mf) {
 }
 
 void RAColorBasedCoalescing::calculateSpillCosts() {
+  for(std::map<unsigned, std::set<unsigned>> :: iterator i = InterferenceGraph.begin(); i != InterferenceGraph.end(); i++) {
+    double newSpillWeight = 0;
+    unsigned vreg = i->first;
+    
+    // go over the def-use of virtual register
+    for (MachineRegisterInfo::reg_instr_iterator I = MRI->reg_instr_begin(vreg), E = MRI->reg_instr_end(); I != E; ) {
+      MachineInstr *machInst = &*(I++);
+      unsigned loopDepth = MLI->getLoopDepth(machInst->getParent());
+      
+      if (loopDepth > 35) {
+          loopDepth = 35; // Avoid overflowing the variable
+      }
+      
+      std::pair<bool, bool> readWrite = machInst->readsWritesVirtualRegister(vreg);
+      newSpillWeight += (readWrite.first + readWrite.second) * pow(10, loopDepth);
+    }
+    
+    SpillWeight[vreg] = newSpillWeight;
+    dbgs() << "SPILL WEIGHT: " << PrintReg(vreg, TRI) << "::" << newSpillWeight << "\n";
+  }
 }
 
 void RAColorBasedCoalescing::clear() {
@@ -451,6 +359,7 @@ void RAColorBasedCoalescing::clear() {
   ColorsTemp.clear();
   Degree.clear();
   ExtendedColors.clear();
+  SpillWeight.clear();
 }
 
 void RAColorBasedCoalescing::clearAll() {
@@ -459,6 +368,7 @@ void RAColorBasedCoalescing::clearAll() {
   ColorsTemp.clear();
   Degree.clear();
   ExtendedColors.clear();
+  SpillWeight.clear();
   CopyRelated.clear();
   Colors.clear();
 }
@@ -718,7 +628,7 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
 
   SpillerInstance.reset(createInlineSpiller(*this, *MF, *VRM));
 
-  Loops = &getAnalysis<MachineLoopInfo>();
+  MLI = &getAnalysis<MachineLoopInfo>();
   DebugVars = &getAnalysis<LiveDebugVariables>();
   AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
 
@@ -792,7 +702,6 @@ unsigned RAColorBasedCoalescing::trySplit(LiveInterval &VirtReg, AllocationOrder
   for (unsigned i = 0; i != UseBlocks.size(); ++i) {
     const SplitAnalysis::BlockInfo &BI = UseBlocks[i];
     if (SA->shouldSplitSingleBlock(BI, SingleInstrs)) {
-      //dbgs() << "Splitando!!!!!!!!!";
       SE->splitSingleBlock(BI);
     }
   }
