@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <map>
 #include <set>
+#include <stack>
 #include <queue>
 #include <list>
 
@@ -81,7 +82,7 @@ namespace {
   std::map<unsigned, std::set<unsigned>> InterferenceGraph;
   std::map<unsigned, int> Degree;
   std::map<unsigned, bool> OnStack;
-  std::queue<unsigned> ColoringStack;
+  std::stack<unsigned> ColoringStack;
   std::map<unsigned, int> ColorsTemp;
   std::map<unsigned, int> Colors;
   std::map<unsigned, std::set<unsigned>> CopyRelated;
@@ -530,7 +531,7 @@ void RAColorBasedCoalescing::simplify() {
 
 void RAColorBasedCoalescing::biasedSelectExtended() {
   while(!ColoringStack.empty()) {
-    unsigned vreg = ColoringStack.front();
+    unsigned vreg = ColoringStack.top();
     ColoringStack.pop();
 
     std::list<int> potentialRegs = getPotentialRegs(vreg);
