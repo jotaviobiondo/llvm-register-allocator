@@ -86,13 +86,12 @@ namespace {
   std::map<unsigned, int> Degree;
   std::map<unsigned, bool> OnStack;
   std::queue<unsigned> ColoringStack;
-  std::set<unsigned> Colored;
   std::map<unsigned, int> Colored_phase1;
-  BitVector Allocatable;
+  //std::set<unsigned> Colored;
+  //BitVector Allocatable;
 
   std::map<unsigned, std::set<unsigned>> CopyRelated;
   std::set<unsigned> Spills;
-
   std::list<int> ExtendedColors;
 
 
@@ -152,6 +151,8 @@ namespace {
       int createNewExtendedColor();
 
       void printVirtualRegisters();
+
+      void clearAll();
 
     public:
       RAColorBasedCoalescing();
@@ -300,7 +301,7 @@ bool RAColorBasedCoalescing::spillInterferences(LiveInterval &VirtReg, unsigned 
  |vregs| * |machineregs|. And since the number of interference tests is
  minimal, there is no value in caching them outside the scope of
  selectOrSplit().*/
-unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &SplitVRegs) {
+/*unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &SplitVRegs) {
   // Populate a list of physical register spill candidates.
   SmallVector<unsigned, 8> PhysRegSpillCands;
 
@@ -346,7 +347,29 @@ unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVecto
   // The live virtual register requesting allocation was spilled, so tell
   // the caller not to allocate anything during this round.
   return 0;
-}
+}*/
+
+
+/*unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &SplitVRegs) {
+  int color = Colored_phase1[VirtReg.reg];
+
+  // if not isExtendedColor -> return color (phys reg) to allocate
+  if (!isExtendedColor(color)) {
+    return color;
+  } 
+
+  // SPILL
+  if (!VirtReg.isSpillable())
+    return ~0u;
+
+  dbgs() << "SPILL: " << PrintReg(VirtReg.reg, TRI);
+  LiveRangeEdit LRE(&VirtReg, SplitVRegs, *MF, *LIS, VRM, nullptr, &DeadRemats);
+  spiller().spill(LRE);
+
+  // The live virtual register requesting allocation was spilled, so tell
+  // the caller not to allocate anything during this round.
+  return 0;
+}*/
 
 
 
@@ -384,9 +407,10 @@ void RAColorBasedCoalescing::algorithm(MachineFunction &mf) {
 
     simplify(mf);
     biased_select(mf);
+
     if(confirm(mf)) {
-      spill = true;
       spillCode(mf);
+      spill = true;
     } else {
       spill = false;
     }
@@ -422,6 +446,11 @@ void RAColorBasedCoalescing::buildInterferenceGraph(MachineFunction &mf) {
     //get the respective LiveInterval
     LiveInterval *VirtReg = &LIS->getInterval(Reg);
     unsigned vReg = VirtReg->reg;
+
+    // Ignores vReg if marked for spill
+    if (Spills.count(vReg) != 0) {
+      continue;
+    }
     
     OnStack[vReg] = false;
     
@@ -657,7 +686,19 @@ void RAColorBasedCoalescing::clear(MachineFunction &mf) {
   //ColoringStack.clear();
   Colored_phase1.clear();
   Degree.clear();
-  Colored.clear();
+  //Colored.clear();
+}
+
+void RAColorBasedCoalescing::clearAll() {
+  InterferenceGraph.clear();
+  OnStack.clear();
+  //ColoringStack.clear();
+  Colored_phase1.clear();
+  Degree.clear();
+  //Colored.clear();
+  ExtendedColors.clear();
+  Spills.clear();
+  CopyRelated.clear();
 }
 
 void RAColorBasedCoalescing::biased_select(MachineFunction &mf) {
@@ -736,6 +777,8 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
 
   allocatePhysRegs();
   postOptimization();
+
+  clearAll();
 
   // Diagnostic output before rewriting
   dbgs() << "\nPost alloc VirtRegMap:\n" << *VRM << "\n";
