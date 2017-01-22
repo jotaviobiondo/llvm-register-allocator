@@ -181,6 +181,8 @@ namespace {
         return LI;
       }
 
+      bool spillInterferences(LiveInterval &VirtReg, unsigned PhysReg, SmallVectorImpl<unsigned> &SplitVRegs);
+
       unsigned selectOrSplit(LiveInterval &VirtReg,
                              SmallVectorImpl<unsigned> &SplitVRegs) override;
 
@@ -240,12 +242,85 @@ void RAColorBasedCoalescing::releaseMemory() {
   SpillerInstance.reset();
 }
 
+bool RAColorBasedCoalescing::spillInterferences(LiveInterval &VirtReg, unsigned PhysReg, SmallVectorImpl<unsigned> &SplitVRegs) {
+  // Record each interference and determine if all are spillable before mutating
+  // either the union or live intervals.
+  SmallVector<LiveInterval*, 8> Intfs;
+
+  // Collect interferences assigned to any alias of the physical register.
+  for (MCRegUnitIterator Units(PhysReg, TRI); Units.isValid(); ++Units) {
+    LiveIntervalUnion::Query &Q = Matrix->query(VirtReg, *Units);
+    Q.collectInterferingVRegs();
+    if (Q.seenUnspillableVReg())
+      return false;
+    for (unsigned i = Q.interferingVRegs().size(); i; --i) {
+      LiveInterval *Intf = Q.interferingVRegs()[i - 1];
+      if (!Intf->isSpillable() || Intf->weight > VirtReg.weight)
+        return false;
+      Intfs.push_back(Intf);
+    }
+  }
+  DEBUG(dbgs() << "spilling " << TRI->getName(PhysReg) <<
+        " interferences with " << VirtReg << "\n");
+  assert(!Intfs.empty() && "expected interference");
+
+  // Spill each interfering vreg allocated to PhysReg or an alias.
+  for (unsigned i = 0, e = Intfs.size(); i != e; ++i) {
+    LiveInterval &Spill = *Intfs[i];
+
+    // Skip duplicates.
+    if (!VRM->hasPhys(Spill.reg))
+      continue;
+
+    // Deallocate the interfering vreg by removing it from the union.
+    // A LiveInterval instance may not be in a union during modification!
+    Matrix->unassign(Spill);
+
+    // Spill the extracted interval.
+    LiveRangeEdit LRE(&Spill, SplitVRegs, *MF, *LIS, VRM, nullptr, &DeadRemats);
+    spiller().spill(LRE);
+  }
+  return true;
+}
+
+
+
 unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &SplitVRegs) {
 
+
+
+  /*std::list<int> PhysRegSpillCands = getPotentialRegs(VirtReg.reg);
+
+
+  // Try to spill another interfering reg with less spill weight.
+  for (std::list<int>::iterator PhysRegI = PhysRegSpillCands.begin(),
+       PhysRegE = PhysRegSpillCands.end(); PhysRegI != PhysRegE; ++PhysRegI) {
+    if (!spillInterferences(VirtReg, *PhysRegI, SplitVRegs)){
+      dbgs() << "EEEEEEEEEEEEEEEEasdijdasjidsijdsajiijsdaij\n";
+      continue;
+    }
+
+    //assert(!Matrix->checkInterference(VirtReg, *PhysRegI) &&     "Interference after spill.");
+    // Tell the caller to allocate to this newly freed physical register.
+    return Colors[VirtReg.reg];
+  }*/
+
   // if not isExtendedColor -> return color (phys reg) to allocate
-  if (!isMarkedForSpill(VirtReg.reg)) {
+  if (!isMarkedForSpill(VirtReg.reg) && Colors[VirtReg.reg] != 0) {
+    //dbgs() << "COR => " << Colors[VirtReg.reg] << "\n";
     return Colors[VirtReg.reg];
   } 
+
+  if(Colors[VirtReg.reg] == 0){
+    std::list<int> PhysRegSpillCands = getPotentialRegs(VirtReg.reg);
+    for (std::list<int>::iterator PhysRegI = PhysRegSpillCands.begin(),PhysRegE = PhysRegSpillCands.end(); 
+      PhysRegI != PhysRegE; ++PhysRegI) {
+       if (!spillInterferences(VirtReg, *PhysRegI, SplitVRegs)){
+        continue;
+       }
+       return *PhysRegI;
+    }
+  }
 
   // Spill
   if (!VirtReg.isSpillable())
@@ -253,7 +328,9 @@ unsigned RAColorBasedCoalescing::selectOrSplit(LiveInterval &VirtReg, SmallVecto
 
   dbgs() << "SPILLING: " << PrintReg(VirtReg.reg, TRI);
   LiveRangeEdit LRE(&VirtReg, SplitVRegs, *MF, *LIS, VRM, nullptr, &DeadRemats);
+  //dbgs() << "\nsankdfkafldanjnnjfdafkj\n";
   spiller().spill(LRE);
+  //dbgs() << "AAAAAAAAAAAAAAAAAAAAAAAAA\n";
 
   // The live virtual register requesting allocation was spilled, so tell
   // the caller not to allocate anything during this round.
@@ -308,7 +385,7 @@ void RAColorBasedCoalescing::algorithm(MachineFunction &mf) {
   int round = 0;
   bool spill = true;
 
-  while (spill) {
+  while (spill && round < 100) {
     dbgs() << "Round #" << round++ << "\n\n";
 
     buildInterferenceGraph();
@@ -319,11 +396,12 @@ void RAColorBasedCoalescing::algorithm(MachineFunction &mf) {
 
     biasedSelectExtended();
 
-    printInterferenceGraphWithColor();
+    //printInterferenceGraphWithColor();
       
     spill = spillCode();
+    //spill = false;
 
-    if (!spill) {
+    if (!spill || round == 100) {
       save();
     }
     
@@ -440,6 +518,10 @@ void RAColorBasedCoalescing::buildInterferenceGraph() {
 
       //ignores if equal
       if(VirtReg == VirtReg1) {
+        continue;
+      }
+
+      if(isMarkedForSpill(vReg1)){
         continue;
       }
 
@@ -606,9 +688,9 @@ bool RAColorBasedCoalescing::isExtendedColor(int color) {
 // ===-------------- LLVM --------------===
 
 bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
-  dbgs() << "\n********** COLORING-BASED COALESCING REGISTER ALLOCATION **********\n"
+  /*dbgs() << "\n********** COLORING-BASED COALESCING REGISTER ALLOCATION **********\n"
                << "********** Function: "
-               << mf.getName() << '\n';
+               << mf.getName() << '\n';*/
 
   MF = &mf;
   RegAllocBase::init(getAnalysis<VirtRegMap>(),
@@ -630,22 +712,34 @@ bool RAColorBasedCoalescing::runOnMachineFunction(MachineFunction &mf) {
   AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
 
 
-  dbgs() << "********** Number of virtual registers: " << MRI->getNumVirtRegs() << "\n\n";
+  //dbgs() << "********** Number of virtual registers: " << MRI->getNumVirtRegs() << "\n\n";
 
 
-  printVirtualRegisters();
+  //printVirtualRegisters();
 
   algorithm(mf);
 
+  //dbgs() << "SAI ALG\n";
+
   allocatePhysRegs();
+
+  //dbgs() << "SAI AL0\n";
+
   postOptimization();
+
+  //dbgs() << "SAI otim\n";
 
   clearAll();
 
+  //dbgs() << "SAI clear\n";  
   // Diagnostic output before rewriting
-  dbgs() << "\nPost alloc VirtRegMap:\n" << *VRM << "\n";
+  //dbgs() << "\nPost alloc VirtRegMap:\n" << *VRM << "\n";
 
   releaseMemory();
+
+  
+  //dbgs() << "SAIuuu\n";
+
   return true;
 }
 
