@@ -350,7 +350,6 @@ void RAColorBasedCoalescing::calculateSpillCosts() {
     }
     
     SpillWeight[vreg] = newSpillWeight;
-    dbgs() << "SPILL WEIGHT: " << PrintReg(vreg, TRI) << "::" << newSpillWeight << "\n";
   }
 }
 
@@ -480,7 +479,7 @@ void RAColorBasedCoalescing::printInterferenceGraphWithColor() {
   dbgs() << " Interference Graph: \n";
   dbgs() << "-----------------------------------------------------------------\n";
   for(std::map<unsigned, std::set<unsigned>> :: iterator j = InterferenceGraph.begin(); j != InterferenceGraph.end(); j++) {
-    dbgs() << "Interferences of " << j->first << "::" << PrintReg(j->first, TRI) << " => " << Degree[j->first] << ": {"; 
+    dbgs() << "Interferences of " << j->first << "::" << PrintReg(j->first, TRI) << " => " << j->second.size() << ": {"; 
     for(std::set<unsigned> :: iterator k = j->second.begin(); k != j->second.end(); k++) {
       dbgs() << *k << ",";
     }
@@ -500,9 +499,9 @@ void RAColorBasedCoalescing::printInterferenceGraphWithColor() {
 
 void RAColorBasedCoalescing::simplify() {
   unsigned min = 0;
-  //para cada aresta no grafo
   for(std::map<unsigned, std::set<unsigned>> :: iterator i = InterferenceGraph.begin(); i != InterferenceGraph.end(); i++) {
-    if(!OnStack[i->first] && (min == 0 || Degree[i->first] < Degree[min])) {
+    unsigned vreg = i->first;
+    if(!OnStack[vreg] && (min == 0 || (SpillWeight[vreg]/Degree[vreg] < SpillWeight[min]/Degree[min]))) {
       min = i->first;
     }
   }
@@ -512,20 +511,17 @@ void RAColorBasedCoalescing::simplify() {
     return;
   }
 
-  //add o min como true para n comparar dnv
   OnStack[min] = true;
-
-  //add o min na fila para colorir
   ColoringStack.push(min);
 
-  //retirando o min das listas de arestas dos outros
+  //decreasing the degree of the edges of min
   for(std::map<unsigned, std::set<unsigned>> :: iterator j = InterferenceGraph.begin(); j != InterferenceGraph.end(); j++) {
     if(j->second.count(min)) {
       Degree[j->first]--;
     }
   }
 
-  //chamar até min = 0
+  //call until min = 0
   simplify();
 }
 
