@@ -496,8 +496,6 @@ bool RAColorBasedCoalescing::isMarkedForSpill(unsigned vreg) {
 // ===-------------- Interference Graph methods --------------===
 
 void RAColorBasedCoalescing::buildInterferenceGraph() {
-  int num = 0;
-
   for(unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
 
     //reg ID
@@ -505,7 +503,6 @@ void RAColorBasedCoalescing::buildInterferenceGraph() {
     if(MRI->reg_nodbg_empty(Reg)) {
       continue;
     }
-    num++;
 
     //get the respective LiveInterval
     LiveInterval *VirtReg = &LIS->getInterval(Reg);
